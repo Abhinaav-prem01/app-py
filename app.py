@@ -1,235 +1,697 @@
-import streamlit as st
+from flask import Flask, request, render_template_string
 from PIL import Image, ImageDraw, ImageFont
 import torch
-import numpy as np
-import time
-import io
-import tempfile
 import os
+import io
+import time
+import base64
 
-# ── Page Configuration ────────────────────────────────────────────────────────
-st.set_page_config(
-    page_title="YOLO Object Detector",
-    page_icon="🔍",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+app = Flask(__name__)
 
-# Define the expected local filename
-DEFAULT_MODEL_FILENAME = "best.pt"
+# ---------------------------------------------------
+# MODEL
+# ---------------------------------------------------
+MODEL_PATH = "best.pt"
 
-# ── Load Model (Handles both Local Path and Bytes) ───────────────────────────
-@st.cache_resource(show_spinner=False)
-def load_model(source):
-    """
-    source can be a string path (e.g. 'best.pt') or bytes from an uploaded file
-    """
-    tmp_path = None
-    
-    # If it's uploaded bytes, write to a temp file first
-    if isinstance(source, bytes):
-        with tempfile.NamedTemporaryFile(suffix=".pt", delete=False) as tmp:
-            tmp.write(source)
-            tmp_path = tmp.name
-        model_path = tmp_path
-    else:
-        model_path = source
+# ---------------------------------------------------
+# LOAD MODEL
+# ---------------------------------------------------
+def load_model():
 
     try:
         from ultralytics import YOLO
-        model = YOLO(model_path)
-        return model, "ultralytics", tmp_path
-    except Exception:
-        pass
-    try:
-        model = torch.hub.load("ultralytics/yolov5", "custom", path=model_path, force_reload=False)
-        model.eval()
-        return model, "yolov5", tmp_path
-    except Exception as e:
-        if tmp_path and os.path.exists(tmp_path):
-            os.remove(tmp_path)
-        return None, str(e), None
 
-# ── Draw Bounding Boxes ────────────────────────────────────────────────────────
-PALETTE = [
-    "#2ecc71", "#3498db", "#e74c3c", "#9b59b6",
-    "#1abc9c", "#f1c40f", "#e67e22", "#34495e"
+        model = YOLO(MODEL_PATH)
+
+        return model, "ultralytics"
+
+    except Exception as e:
+
+        print("MODEL LOAD ERROR:", e)
+
+        return None, None
+
+# ---------------------------------------------------
+# COLORS
+# ---------------------------------------------------
+COLORS = [
+    "#000000",
+    "#444444",
+    "#666666",
+    "#888888"
 ]
 
-def draw_boxes(image: Image.Image, detections: list) -> Image.Image:
-    img = image.copy().convert("RGBA")
-    overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
-    draw = ImageDraw.Draw(overlay)
+# ---------------------------------------------------
+# DRAW BOXES
+# ---------------------------------------------------
 
-    seen_labels = {}
-    for label, conf, x1, y1, x2, y2 in detections:
-        if label not in seen_labels:
-            seen_labels[label] = PALETTE[len(seen_labels) % len(PALETTE)]
-        color_hex = seen_labels[label]
-        
-        r, g, b = int(color_hex[1:3], 16), int(color_hex[3:5], 16), int(color_hex[5:7], 16)
-        color = (r, g, b, 255)
-        fill  = (r, g, b, 35)
+def draw_boxes(image, detections):
 
-        draw.rectangle([x1, y1, x2, y2], outline=color, width=3, fill=fill)
-        
-        tag = f"{label} {conf:.0%}"
-        th = 20
-        tw = len(tag) * 8 + 8
-        draw.rectangle([x1, y1 - th, x1 + tw, y1], fill=color)
-        
-        try:
-            font = ImageFont.load_default()
-        except Exception:
-            font = None
-            
-        draw.text((x1 + 4, y1 - th + 2), tag, fill=(255, 255, 255, 255), font=font)
+    img = image.copy().convert("RGB")
 
-    return Image.alpha_composite(img, overlay).convert("RGB")
+    draw = ImageDraw.Draw(img)
 
-# ── Inference Engine ──────────────────────────────────────────────────────────
-def run_inference(model, backend, image: Image.Image, conf_thresh: float):
-    t0 = time.time()
-    dets = []
+    GREEN = "#00aa00"
 
-    if backend == "ultralytics":
-        results = model.predict(image, conf=conf_thresh, verbose=False)
-        r = results[0]
-        boxes = r.boxes
-        names = r.names
-        if boxes is not None and len(boxes):
-            for box in boxes:
-                x1, y1, x2, y2 = box.xyxy[0].tolist()
-                conf = float(box.conf[0])
-                cls  = int(box.cls[0])
-                dets.append((names[cls], conf, int(x1), int(y1), int(x2), int(y2)))
-    else:
-        results = model(image)
-        df = results.pandas().xyxy[0]
-        df = df[df["confidence"] >= conf_thresh]
-        dets = [
-            (row["name"], row["confidence"], int(row["xmin"]), int(row["ymin"]), int(row["xmax"]), int(row["ymax"]))
-            for _, row in df.iterrows()
-        ]
+    for det in detections:
 
-    elapsed = (time.time() - t0) * 1000
-    annotated = draw_boxes(image, dets)
-    return annotated, dets, elapsed
+        label, conf, x1, y1, x2, y2 = det
 
-
-# ── UI Layout ──────────────────────────────────────────────────────────────────
-st.title("🔍 YOLO Object Detection")
-st.markdown("A clean dashboard for local YOLO model deployment and real-time evaluation.")
-
-# ── Sidebar Control Panel
-with st.sidebar:
-    st.header("⚙️ Configuration")
-    
-    model = None
-    backend = None
-    
-    # Check if 'best.pt' exists locally in the app directory
-    if os.path.exists(DEFAULT_MODEL_FILENAME):
-        st.info(f"Using auto-detected model: `{DEFAULT_MODEL_FILENAME}`")
-        with st.spinner("Loading weights..."):
-            model, backend, _ = load_model(DEFAULT_MODEL_FILENAME)
-        if model:
-            st.success(f"Active via `{backend}`")
-        else:
-            st.error(f"Failed to parse `{DEFAULT_MODEL_FILENAME}`: {backend}")
-    
-    # If no local model is found, display the file uploader fallback
-    if model is None:
-        uploaded_model = st.file_uploader(
-            "Upload Model Weights (.pt)",
-            type=["pt"],
-            help="Place 'best.pt' in the app directory or upload weights here."
+        # THICKER GREEN BOX
+        draw.rectangle(
+            [x1, y1, x2, y2],
+            outline=GREEN,
+            width=6
         )
-        if uploaded_model is not None:
-            with st.spinner("Loading uploaded neural network..."):
-                model_bytes = uploaded_model.read()
-                model, backend, _ = load_model(model_bytes)
-                
-            if model is None:
-                st.error(f"Failed to load model architecture. Error: {backend}")
-                st.stop()
-            else:
-                st.success(f"Loaded via `{backend}`")
-                
-    st.divider()
-    
-    conf_thresh = st.slider(
-        "Confidence Threshold", 
-        min_value=0.05, 
-        max_value=1.00, 
-        value=0.25, 
-        step=0.05,
-        help="Minimum confidence score required to display a detection box."
-    )
 
-# ── Main Content Area
-if model is None:
-    st.info("👈 Please upload your `.pt` model weights file or place `best.pt` in the project folder to begin.")
-else:
-    uploaded_file = st.file_uploader(
-        "Upload Source Image", 
-        type=["jpg", "jpeg", "png", "webp", "bmp"]
-    )
+        # LARGER LABEL
+        text = f"{label} {conf:.2f}"
 
-    if uploaded_file:
-        image = Image.open(uploaded_file).convert("RGB")
-        
-        with st.spinner("Processing framework inference..."):
-            annotated_img, detections, inference_time = run_inference(model, backend, image, conf_thresh)
-        
-        # ── KPI Metrics Ribbon
-        m_col1, m_col2, m_col3 = st.columns(3)
-        with m_col1:
-            st.metric(label="Total Objects Detected", value=len(detections))
-        with m_col2:
-            unique_classes = len(set(d[0] for d in detections))
-            st.metric(label="Unique Classes Identified", value=unique_classes)
-        with m_col3:
-            st.metric(label="Inference Velocity", value=f"{inference_time:.1f} ms")
-            
-        st.divider()
-
-        # ── Image Views Split View
-        img_col1, img_col2 = st.columns(2)
-        with img_col1:
-            st.subheader("Original Image")
-            st.image(image, use_container_width=True)
-        with img_col2:
-            st.subheader("Model Predictions")
-            st.image(annotated_img, use_container_width=True)
-            
-            buf = io.BytesIO()
-            annotated_img.save(buf, format="PNG")
-            st.download_button(
-                label="💾 Download Rendered Image",
-                data=buf.getvalue(),
-                file_name=f"detected_{uploaded_file.name}",
-                mime="image/png",
-                use_container_width=True
+        try:
+            font = ImageFont.truetype(
+                "arial.ttf",
+                48
             )
 
-        # ── Detections Data Inventory
-        if detections:
-            st.divider()
-            st.subheader("📋 Detailed Breakdown")
-            
-            table_data = [
-                {
-                    "Class Index": idx + 1,
-                    "Label": det[0],
-                    "Confidence Score": f"{det[1]:.2%}",
-                    "Box Dimensions (W×H)": f"{det[4] - det[2]} × {det[5] - det[3]} px",
-                    "Coordinates [Xmin, Ymin, Xmax, Ymax]": f"[{det[2]}, {det[3]}, {det[4]}, {det[5]}]"
-                }
-                for idx, det in enumerate(sorted(detections, key=lambda x: -x[1]))
-            ]
-            st.dataframe(table_data, use_container_width=True, hide_index=True)
+        except:
+            font = ImageFont.load_default()
 
-    else:
-        st.divider()
-        st.info("💡 Model is ready! Please drop or upload an image file above to run inference.")
+        # TEXT SIZE
+        bbox = draw.textbbox(
+            (0, 0),
+            text,
+            font=font
+        )
+
+        text_width = bbox[2] - bbox[0]
+        text_height = bbox[3] - bbox[1]
+
+        # LABEL BACKGROUND
+        draw.rectangle(
+            [
+                x1,
+                y1 - text_height - 16,
+                x1 + text_width + 20,
+                y1
+            ],
+            fill=GREEN
+        )
+
+        # TEXT
+        draw.text(
+            (
+                x1 + 10,
+                y1 - text_height - 8
+            ),
+            text,
+            fill="white",
+            font=font
+        )
+
+    return img
+
+# ---------------------------------------------------
+# RUN INFERENCE
+# ---------------------------------------------------
+def run_inference(model, image, conf_thresh):
+
+    start = time.time()
+
+    detections = []
+
+    results = model.predict(
+        image,
+        conf=conf_thresh,
+        verbose=False
+    )
+
+    r = results[0]
+
+    if r.boxes is not None:
+
+        for box in r.boxes:
+
+            x1, y1, x2, y2 = box.xyxy[0].tolist()
+
+            conf = float(box.conf[0])
+
+            cls = int(box.cls[0])
+
+            label = r.names[cls]
+
+            detections.append(
+                (
+                    label,
+                    conf,
+                    int(x1),
+                    int(y1),
+                    int(x2),
+                    int(y2)
+                )
+            )
+
+    elapsed = (
+        time.time() - start
+    ) * 1000
+
+    annotated = draw_boxes(
+        image,
+        detections
+    )
+
+    return annotated, detections, elapsed
+
+# ---------------------------------------------------
+# LOAD MODEL
+# ---------------------------------------------------
+model, backend = load_model()
+
+# ---------------------------------------------------
+# LOGO
+# ---------------------------------------------------
+LOGO_PATH = r"/mnt/data/ChatGPT Image May 25, 2026, 03_30_36 PM.png"
+
+logo_b64 = ""
+
+if os.path.exists(LOGO_PATH):
+
+    with open(LOGO_PATH, "rb") as f:
+
+        logo_b64 = base64.b64encode(
+            f.read()
+        ).decode()
+
+# ---------------------------------------------------
+# HTML TEMPLATE
+# ---------------------------------------------------
+HTML = """
+
+<!DOCTYPE html>
+
+<html>
+
+<head>
+
+<title>YOLO Detector</title>
+
+<style>
+
+*{
+    margin:0;
+    padding:0;
+    box-sizing:border-box;
+    font-family:Arial,sans-serif;
+}
+
+body{
+    background:white;
+    color:black;
+    padding:40px;
+}
+
+.container{
+    max-width:1200px;
+    margin:auto;
+}
+
+.logo-box{
+    text-align:center;
+    margin-bottom:25px;
+}
+
+.logo-box img{
+    width:220px;
+    max-width:100%;
+}
+
+h1{
+    font-size:40px;
+    font-weight:500;
+    margin-bottom:10px;
+    text-align:center;
+}
+
+.subtitle{
+    color:#666;
+    margin-bottom:40px;
+    text-align:center;
+}
+
+.card{
+    border:1px solid #ddd;
+    padding:25px;
+    margin-bottom:30px;
+}
+
+form{
+    display:flex;
+    flex-direction:column;
+    gap:20px;
+}
+
+input[type=file]{
+    border:1px solid #ccc;
+    padding:12px;
+}
+
+input[type=range]{
+    width:100%;
+}
+
+.slider-value{
+    color:#666;
+    font-size:14px;
+}
+
+button{
+    background:black;
+    color:white;
+    border:none;
+    padding:14px;
+    cursor:pointer;
+    font-size:15px;
+}
+
+button:hover{
+    opacity:0.9;
+}
+
+.metrics{
+    display:grid;
+    grid-template-columns:repeat(3,1fr);
+    gap:20px;
+    margin-bottom:30px;
+}
+
+.metric{
+    border:1px solid #ddd;
+    padding:25px;
+}
+
+.metric h2{
+    font-size:42px;
+    font-weight:400;
+    margin-bottom:8px;
+}
+
+.metric p{
+    color:#666;
+}
+
+.images{
+    display:grid;
+    grid-template-columns:1fr 1fr;
+    gap:25px;
+}
+
+.image-box{
+    border:1px solid #ddd;
+    padding:20px;
+}
+
+.image-box h3{
+    margin-bottom:15px;
+    font-weight:500;
+}
+
+.image-box img{
+    width:100%;
+}
+
+.table-box{
+    border:1px solid #ddd;
+    padding:25px;
+    margin-top:30px;
+}
+
+table{
+    width:100%;
+    border-collapse:collapse;
+    margin-top:20px;
+}
+
+th{
+    background:#f5f5f5;
+    text-align:left;
+    padding:14px;
+}
+
+td{
+    padding:14px;
+    border-bottom:1px solid #eee;
+}
+
+.error{
+    color:red;
+    margin-top:20px;
+}
+
+@media(max-width:900px){
+
+    .images{
+        grid-template-columns:1fr;
+    }
+
+    .metrics{
+        grid-template-columns:1fr;
+    }
+
+}
+
+</style>
+
+</head>
+
+<body>
+
+<div class="container">
+
+    <div class="logo-box">
+
+        <img
+            src="data:image/png;base64,{{ logo }}"
+        >
+
+    </div>
+
+    <h1>
+    YOLO Object Detector
+    </h1>
+
+    <div class="subtitle">
+    Local object detection using YOLO
+    </div>
+
+    <div class="card">
+
+        <form method="POST" enctype="multipart/form-data">
+
+            <div>
+
+                <label>
+                Upload Image
+                </label>
+
+            </div>
+
+            <input
+                type="file"
+                name="image"
+                required
+            >
+
+            <div>
+
+                <label>
+                Confidence Threshold
+                </label>
+
+            </div>
+
+            <input
+                type="range"
+                name="conf"
+                id="confSlider"
+                min="0.05"
+                max="1"
+                step="0.05"
+                value="0.25"
+                oninput="updateSlider(this.value)"
+            >
+
+            <div class="slider-value">
+
+                Current Value:
+                <span id="sliderText">
+                0.25
+                </span>
+
+            </div>
+
+            <button type="submit">
+
+                Run Detection
+
+            </button>
+
+        </form>
+
+        {% if model_loaded == False %}
+
+        <div class="error">
+
+            best.pt not found in project folder
+
+        </div>
+
+        {% endif %}
+
+    </div>
+
+    {% if result %}
+
+    <div class="metrics">
+
+        <div class="metric">
+
+            <h2>
+            {{ total }}
+            </h2>
+
+            <p>
+            Total Objects
+            </p>
+
+        </div>
+
+        <div class="metric">
+
+            <h2>
+            {{ unique }}
+            </h2>
+
+            <p>
+            Unique Classes
+            </p>
+
+        </div>
+
+        <div class="metric">
+
+            <h2>
+            {{ speed }}
+            </h2>
+
+            <p>
+            Inference Time
+            </p>
+
+        </div>
+
+    </div>
+
+    <div class="images">
+
+        <div class="image-box">
+
+            <h3>
+            Original Image
+            </h3>
+
+            <img
+                src="data:image/png;base64,{{ original }}"
+            >
+
+        </div>
+
+        <div class="image-box">
+
+            <h3>
+            Detection Result
+            </h3>
+
+            <img
+                src="data:image/png;base64,{{ detected }}"
+            >
+
+        </div>
+
+    </div>
+
+    <div class="table-box">
+
+        <h2>
+        Detection Results
+        </h2>
+
+        <table>
+
+            <tr>
+
+                <th>
+                Class
+                </th>
+
+                <th>
+                Confidence
+                </th>
+
+                <th>
+                Coordinates
+                </th>
+
+            </tr>
+
+            {% for d in detections %}
+
+            <tr>
+
+                <td>
+                {{ d[0] }}
+                </td>
+
+                <td>
+                {{ '%.2f'|format(d[1] * 100) }}%
+                </td>
+
+                <td>
+                [{{ d[2] }}, {{ d[3] }}, {{ d[4] }}, {{ d[5] }}]
+                </td>
+
+            </tr>
+
+            {% endfor %}
+
+        </table>
+
+    </div>
+
+    {% endif %}
+
+</div>
+
+<script>
+
+function updateSlider(value){
+
+    document.getElementById(
+        "sliderText"
+    ).innerText = value;
+
+}
+
+</script>
+
+</body>
+
+</html>
+
+"""
+
+# ---------------------------------------------------
+# ROUTE
+# ---------------------------------------------------
+@app.route("/", methods=["GET", "POST"])
+
+def index():
+
+    if request.method == "POST":
+
+        if model is None:
+
+            return render_template_string(
+                HTML,
+                model_loaded=False,
+                result=False,
+                logo=logo_b64
+            )
+
+        file = request.files["image"]
+
+        conf = float(
+            request.form.get(
+                "conf",
+                0.25
+            )
+        )
+
+        image = Image.open(
+            file.stream
+        ).convert("RGB")
+
+        annotated, detections, speed = run_inference(
+            model,
+            image,
+            conf
+        )
+
+        original_buffer = io.BytesIO()
+
+        image.save(
+            original_buffer,
+            format="PNG"
+        )
+
+        detected_buffer = io.BytesIO()
+
+        annotated.save(
+            detected_buffer,
+            format="PNG"
+        )
+
+        original_b64 = base64.b64encode(
+            original_buffer.getvalue()
+        ).decode()
+
+        detected_b64 = base64.b64encode(
+            detected_buffer.getvalue()
+        ).decode()
+
+        return render_template_string(
+
+            HTML,
+
+            model_loaded=True,
+
+            result=True,
+
+            original=original_b64,
+
+            detected=detected_b64,
+
+            detections=detections,
+
+            total=len(detections),
+
+            unique=len(
+                set(d[0] for d in detections)
+            ),
+
+            speed=f"{speed:.1f} ms",
+
+            logo=logo_b64
+
+        )
+
+    return render_template_string(
+
+        HTML,
+
+        model_loaded=(
+            model is not None
+        ),
+
+        result=False,
+
+        logo=logo_b64
+
+    )
+
+# ---------------------------------------------------
+# RUN APP
+# ---------------------------------------------------
+if __name__ == "__main__":
+
+    app.run(
+        debug=True
+    )
