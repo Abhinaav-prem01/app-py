@@ -16,32 +16,34 @@ app = Flask(__name__)
 # ---------------------------------------------------
 # MODEL
 # ---------------------------------------------------
+from ultralytics import YOLO
+
+# ---------------------------------------------------
+# MODEL DOWNLOAD
+# ---------------------------------------------------
 FILE_ID = "1mZTfnq8hJ3KP4_BzjDHO00nhh59fCfSZ"
-MODEL_PATH = "best.pt"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))  # always same folder as app.py
+MODEL_PATH = os.path.join(BASE_DIR, "best.pt")
 
 if not os.path.exists(MODEL_PATH):
-    print("Downloading model...")
+    print(f"Downloading model to {MODEL_PATH} ...")
     gdown.download(f"https://drive.google.com/uc?id={FILE_ID}", MODEL_PATH, quiet=False)
-    print("Done.")
-
+    print(f"Downloaded! Size: {os.path.getsize(MODEL_PATH)} bytes")
+else:
+    print(f"Model found at {MODEL_PATH}, size: {os.path.getsize(MODEL_PATH)} bytes")
 
 # ---------------------------------------------------
 # LOAD MODEL
 # ---------------------------------------------------
 def load_model():
-
     try:
-        from ultralytics import YOLO
-
         model = YOLO(MODEL_PATH)
-
         return model, "ultralytics"
-
     except Exception as e:
-
         print("MODEL LOAD ERROR:", e)
-
         return None, None
+
+
 
 # ---------------------------------------------------
 # COLORS
