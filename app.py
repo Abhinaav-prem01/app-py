@@ -7,18 +7,22 @@ import time
 import base64
 import urllib.request
 
-MODEL_URL = "https://https://drive.google.com/drive/u/3/my-drive"  # e.g. Google Drive, S3, Hugging Face
+import gdown
 
-if not os.path.exists("best.pt"):
-    print("Downloading model...")
-    urllib.request.urlretrieve(MODEL_URL, "best.pt")
-    print("Done.")
+
 
 app = Flask(__name__)
 
 # ---------------------------------------------------
 # MODEL
 # ---------------------------------------------------
+FILE_ID = "1mZTfnq8hJ3KP4_BzjDHO00nhh59fCfSZ"
+MODEL_PATH = "best.pt"
+
+if not os.path.exists(MODEL_PATH):
+    print("Downloading model...")
+    gdown.download(f"https://drive.google.com/uc?id={FILE_ID}", MODEL_PATH, quiet=False)
+    print("Done.")
 
 
 # ---------------------------------------------------
