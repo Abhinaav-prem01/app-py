@@ -11,7 +11,9 @@ app = Flask(__name__)
 # ---------------------------------------------------
 # MODEL
 # ---------------------------------------------------
-MODEL_PATH = "best.pt"
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+MODEL_PATH = os.path.join(BASE_DIR, "best.pt")
 
 # ---------------------------------------------------
 # LOAD MODEL
