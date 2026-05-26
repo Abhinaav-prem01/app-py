@@ -7,7 +7,7 @@ import time
 import base64
 import urllib.request
 
-MODEL_URL = "https://https://drive.google.com/drive/u/3/my-drive/best.pt"  # e.g. Google Drive, S3, Hugging Face
+MODEL_URL = "https://https://drive.google.com/drive/u/3/my-drive"  # e.g. Google Drive, S3, Hugging Face
 
 if not os.path.exists("best.pt"):
     print("Downloading model...")
