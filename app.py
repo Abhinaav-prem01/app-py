@@ -5,16 +5,21 @@ import os
 import io
 import time
 import base64
+import urllib.request
+
+MODEL_URL = "https://https://drive.google.com/drive/u/3/my-drive/best.pt"  # e.g. Google Drive, S3, Hugging Face
+
+if not os.path.exists("best.pt"):
+    print("Downloading model...")
+    urllib.request.urlretrieve(MODEL_URL, "best.pt")
+    print("Done.")
 
 app = Flask(__name__)
 
 # ---------------------------------------------------
 # MODEL
 # ---------------------------------------------------
-MODEL_PATH = "best.pt"
-print("WORKING DIR:", os.getcwd())
-print("FILES:", os.listdir())
-print("MODEL EXISTS:", os.path.exists(MODEL_PATH))
+
 
 # ---------------------------------------------------
 # LOAD MODEL
