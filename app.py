@@ -12,6 +12,9 @@ app = Flask(__name__)
 # MODEL
 # ---------------------------------------------------
 MODEL_PATH = "best.pt"
+print("WORKING DIR:", os.getcwd())
+print("FILES:", os.listdir())
+print("MODEL EXISTS:", os.path.exists(MODEL_PATH))
 
 # ---------------------------------------------------
 # LOAD MODEL
