@@ -183,7 +183,7 @@ model, backend = load_model()
 # ---------------------------------------------------
 # LOGO
 # ---------------------------------------------------
-LOGO_PATH = r"/mnt/data/ChatGPT Image May 25, 2026, 03_30_36 PM.png"
+LOGO_PATH = r"WattsWrong.png"
 
 logo_b64 = ""
 
