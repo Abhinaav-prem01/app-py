@@ -183,7 +183,7 @@ model, backend = load_model()
 # ---------------------------------------------------
 # LOGO
 # ---------------------------------------------------
-LOGO_PATH = r"WattsWrong.png"
+LOGO_PATH = os.path.join(BASE_DIR, "WattsWrong.png")  
 
 logo_b64 = ""
 
